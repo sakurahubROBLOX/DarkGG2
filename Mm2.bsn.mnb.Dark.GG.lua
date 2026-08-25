@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
@@ -306,7 +307,6 @@ Title.TextColor3 = Color3.new(1, 1, 1)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
 
--- Tab Selection Bar
 local TabBar = Instance.new("Frame", MainWindow)
 TabBar.Size = UDim2.new(0.9, 0, 0, 35)
 TabBar.Position = UDim2.new(0.05, 0, 0, 45)
@@ -338,7 +338,7 @@ local CombatScroll = CreateTabContent()
 local VisualsScroll = CreateTabContent()
 local MiscScroll = CreateTabContent()
 
-CombatScroll.Visible = true -- Default active tab
+CombatScroll.Visible = true
 
 local function CreateTabButton(name, targetScroll)
     local btn = Instance.new("TextButton", TabBar)
@@ -561,9 +561,8 @@ TargetBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Populating Tabs
 AddToggle(CombatScroll, "Kill All", function(v) Config.KillAll = v end)
-AddToggle(CombatScroll, "Wallbang", function(v) Config.Wallbang = v end)
+AddToggle(CombatScroll, "Wallbang (Instant TP Shot)", function(v) Config.Wallbang = v end)
 AddToggle(CombatScroll, "Aimbot (Murderer + FOV)", function(v) Config.Aimbot = v end)
 AddToggle(CombatScroll, "Fling Target", function(v) Config.FlingTarget = v end)
 AddToggle(CombatScroll, "Fling Murderer", function(v) Config.FlingMurderer = v end)
@@ -708,13 +707,13 @@ local function performFling(targetChar)
     while tick() - start < 0.3 do
         if not targetHRP or not targetHRP.Parent or not myHRP or not myHRP.Parent then break end
         myHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 0)
-        myHRP.Velocity = Vector3.new(9999, 9999, 9999)
+        myHRP.AssemblyLinearVelocity = Vector3.new(9999, 9999, 9999)
         RunService.Heartbeat:Wait()
     end
 
     bav:Destroy()
-    myHRP.Velocity = Vector3.new(0, 0, 0)
-    myHRP.RotVelocity = Vector3.new(0, 0, 0)
+    myHRP.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+    myHRP.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
     myHRP.CFrame = oldPos
 end
 
@@ -862,21 +861,60 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- ==================== ИСПРАВЛЕННЫЙ WALLBANG ====================
+local lastWallbangShoot = 0
 RunService.Heartbeat:Connect(function()
     FOVCircle.Visible = Config.Aimbot
     FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
 
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-            local hrp = p.Character.HumanoidRootPart
-            if Config.Wallbang then
-                hrp.Size = Vector3.new(15, 15, 15)
-                hrp.Transparency = 0.7
-                hrp.CanCollide = false
-            else
-                hrp.Size = Vector3.new(2, 2, 1)
-                hrp.Transparency = 1
-                hrp.CanCollide = false
+    -- ЛОГИКА WALLBANG (ПРОСТРЕЛ ЧЕРЕЗ СТЕНУ)
+    if Config.Wallbang and (os.clock() - lastWallbangShoot >= 0.5) then
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local gun = char and (char:FindFirstChild("Gun") or LocalPlayer.Backpack:FindFirstChild("Gun"))
+        
+        if hrp and gun then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and getRole(p) == "Murderer" and p.Character then
+                    local targetHrp = p.Character:FindFirstChild("HumanoidRootPart")
+                    local humanoid = p.Character:FindFirstChild("Humanoid")
+                    
+                    if targetHrp and humanoid and humanoid.Health > 0 then
+                        lastWallbangShoot = os.clock()
+                        
+                        task.spawn(function()
+                            -- Экипируем пушку если она в рюкзаке
+                            if gun.Parent == LocalPlayer.Backpack then
+                                gun.Parent = char
+                                task.wait(0.02)
+                            end
+                            
+                            -- Сохраняем позицию
+                            local oldCFrame = hrp.CFrame
+                            
+                            -- Отключаем физику для мгновенного перемещения
+                            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                            
+                            -- ТЕЛЕПОРТ К ЦЕЛИ (сквозь стены)
+                            -- Ставим чуть перед ним, чтобы шот прошел
+                            hrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 1.5)
+                            
+                            -- Ждем минимальное время для регистрации сервером
+                            task.wait(0.03)
+                            
+                            -- ВЫСТРЕЛ
+                            pcall(function()
+                                gun:Activate()
+                            end)
+                            
+                            -- Возврат на место
+                            task.wait(0.05)
+                            hrp.CFrame = oldCFrame
+                            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        end)
+                        break
+                    end
+                end
             end
         end
     end
@@ -936,4 +974,3 @@ RunService.Heartbeat:Connect(function()
         end
     end
 end)
-
